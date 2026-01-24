@@ -1,0 +1,29 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: ' HSK-official-Query-System'
+message: >-
+  Please cite this dataset using the metadata from
+  'preferred-citation'.
+type: dataset
+authors:
+  - given-names: Shawky
+    family-names: Nasr
+    email: shawky.nasr@hotmail.com
+identifiers:
+  - type: url
+    value: >-
+      https://github.com/shawkynasr/HSK-official-Query-System
+repository-code: 'https://github.com/shawkynasr/HSK-official-Query-System'
+abstract: >-
+  《国际中文教育中文水平等级标准》查询系统Query System of Chinese Proficiency
+  Grading Standards for International Chinese Language
+  Education, New HSK Levels 2021
+keywords:
+  - HSK
+  - Chinese Proficiency
+  - 国际中文教育
+  - 中文水平等级标准
+license: MIT
+date-released: '2021-05-24'
