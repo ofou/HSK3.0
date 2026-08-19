@@ -34,7 +34,7 @@ jobs:
           from pathlib import Path
 
           API  = "https://www.chinesetest.cn/api/hsk/outline/"
-          UA   = "hsk3.0-sync (+https://github.com/ofou/HSK3.0)"
+          UA   = "hsk-sync (+https://github.com/ofou/hsk)"
           DIST = Path(os.environ["RUNNER_TEMP"]) / "dist"
 
           ZH = {"HSK1": "一级", "HSK2": "二级", "HSK3": "三级", "HSK4": "四级",
@@ -165,10 +165,10 @@ jobs:
                   "Assets have English headers and ASCII filenames; the data is unchanged Chinese.",
                   "",
                   "```",
-                  "curl -LO https://github.com/ofou/HSK3.0/releases/latest/download/vocabulary.csv",
-                  "curl -LO https://github.com/ofou/HSK3.0/releases/latest/download/characters.csv",
-                  "curl -LO https://github.com/ofou/HSK3.0/releases/latest/download/handwriting.csv",
-                  "curl -LO https://github.com/ofou/HSK3.0/releases/latest/download/grammar.csv",
+                  "curl -LO https://github.com/ofou/hsk/releases/latest/download/vocabulary.csv",
+                  "curl -LO https://github.com/ofou/hsk/releases/latest/download/characters.csv",
+                  "curl -LO https://github.com/ofou/hsk/releases/latest/download/handwriting.csv",
+                  "curl -LO https://github.com/ofou/hsk/releases/latest/download/grammar.csv",
                   "```"]
           (DIST / "NOTES.md").write_text("\n".join(out) + "\n", encoding="utf-8")
           print("built", ", ".join(sorted(p.name for p in DIST.iterdir())))
