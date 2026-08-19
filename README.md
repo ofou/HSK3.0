@@ -17,4 +17,4 @@ Updates
 
 2023-11-27 added 汉字表 2023（only 3000) and 手写汉字Handwriting 2023.
 
-2026-08-19 added 语法 2025 (HSK 3.0 grammar, 2025 revision) as 语法 2025.csv: converted the uploaded GB2312 export to UTF-8 and restored the 590 “……” characters the export had dropped.
+2026-08-19 restored the 语法 file: converted the GB2312 upload to UTF-8 and recovered the 590 “……” its export had dropped. Verified against the 2021 standard — 572 grammar points, 48/81/81/76/71/67/148 per level — so it is filed as 语法.csv next to 词汇.csv and 汉字.csv. Note that every file here is the 2021 standard (词汇 11092, 汉字 3000, 音节 1110, 手写汉字 1200, 语法 572); the 2025 syllabus (《HSK 考试大纲》2025-11 发布, 2026-07 实施) is a different dataset: 11000 words, 3088 认读字, 1200 书写字, 593 grammar points.
