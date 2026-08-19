@@ -16,3 +16,5 @@ Updates
 2023-11-27 fixed 语法 file.
 
 2023-11-27 added 汉字表 2023（only 3000) and 手写汉字Handwriting 2023.
+
+2026-08-19 added 语法 2025 (HSK 3.0 grammar, 2025 revision) as 语法 2025.csv: converted the uploaded GB2312 export to UTF-8 and restored the 590 “……” characters the export had dropped.
