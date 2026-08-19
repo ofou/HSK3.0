@@ -46,17 +46,17 @@ UTF-8, CRLF, Chinese header row, one entry per row, `No.` contiguous from 1. Row
 | [`手写汉字.csv`](手写汉字.csv) | 1200 | `No., 级别, 汉字` — characters for writing | `hanziPage`, `type=2` |
 | [`语法.csv`](语法.csv) | 593 | `No., 级别, 类别, 类别名称, 细目, 语法内容, 例句` — grammar, with example sentences | `languagePage` |
 
-`级别` is `一级`…`六级`, `七-九级`. In [`词汇.csv`](词汇.csv) a word that returns at a higher band with another sense carries both, e.g. `四级（五级）`; the band it counts against is the first one. Writing characters start at band 2: bands 1–2 share one list of 100. The 2025 syllabus has no syllable list, so there is no 音节 file; the 2021 lists are in the git history, up to tag [`3.0`](https://github.com/ofou/HSK3.0/tree/3.0).
+`级别` is `一级`…`六级`, `七-九级`. In [`词汇.csv`](词汇.csv) a word that returns at a higher band with another sense carries both, e.g. `四级（五级）`; the band it counts against is the first one. Writing characters start at band 2: bands 1–2 share one list of 100. The 2025 syllabus has no syllable list, so there is no 音节 file; the 2021 lists are in the git history, up to tag [`3.0`](https://github.com/ofou/hsk/tree/3.0).
 
 ## Releases
 
 A [monthly workflow](.github/workflows/sync.yml) rebuilds all four files from the API and, when anything changed, publishes them as an **English-headed build**: identical Chinese data, English column names, ASCII filenames.
 
 ```sh
-curl -LO https://github.com/ofou/HSK3.0/releases/latest/download/vocabulary.csv   # 词汇.csv
-curl -LO https://github.com/ofou/HSK3.0/releases/latest/download/characters.csv   # 汉字.csv
-curl -LO https://github.com/ofou/HSK3.0/releases/latest/download/handwriting.csv  # 手写汉字.csv
-curl -LO https://github.com/ofou/HSK3.0/releases/latest/download/grammar.csv      # 语法.csv
+curl -LO https://github.com/ofou/hsk/releases/latest/download/vocabulary.csv   # 词汇.csv
+curl -LO https://github.com/ofou/hsk/releases/latest/download/characters.csv   # 汉字.csv
+curl -LO https://github.com/ofou/hsk/releases/latest/download/handwriting.csv  # 手写汉字.csv
+curl -LO https://github.com/ofou/hsk/releases/latest/download/grammar.csv      # 语法.csv
 ```
 
 `No., Level, Word, Pinyin, PartOfSpeech` for the vocabulary, `No., Level, Character` for both character lists, `No., Level, Category, Subcategory, Detail, Content, Examples` for the grammar. Each release also carries `SHA256SUMS.txt` and a per-band count table.
