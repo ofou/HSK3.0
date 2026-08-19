@@ -1,0 +1,210 @@
+name: sync
+
+# Rebuilds every CSV from the official syllabus API once a month.
+# Full rebuild, no incremental state: what the API returns is what gets written.
+# If nothing changed, nothing is committed and no release is cut.
+
+on:
+  schedule:
+    - cron: "0 6 1 * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: publish a release even if the data is unchanged
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rebuild from the official API
+        run: |
+          python3 - <<'PY'
+          import csv, hashlib, io, json, os, urllib.parse, urllib.request
+          from pathlib import Path
+
+          API  = "https://www.chinesetest.cn/api/hsk/outline/"
+          UA   = "hsk3.0-sync (+https://github.com/ofou/HSK3.0)"
+          DIST = Path(os.environ["RUNNER_TEMP"]) / "dist"
+
+          ZH = {"HSK1": "一级", "HSK2": "二级", "HSK3": "三级", "HSK4": "四级",
+                "HSK5": "五级", "HSK6": "六级", "HSK7-9": "七-九级"}
+          BANDS = list(ZH.values())
+
+          # In the printed syllabus but missing from the query system. Applied only
+          # when absent, so it goes inert if fixed upstream. 大纲 2025-11, 词汇 HSK(五级).
+          OMITTED = [{"sort": 2472, "levelName": "五级", "word": "好",
+                      "pinyin": "hào", "cixing": "动"}]
+
+          def fetch(endpoint):
+              recs, page = [], 1
+              while True:
+                  url = f"{API}{endpoint}?" + urllib.parse.urlencode({"current": page, "size": 1000})
+                  req = urllib.request.Request(url, data=b"", method="POST", headers={
+                      "User-Agent": UA, "Accept": "application/json",
+                      "Content-Type": "application/json",
+                      "Referer": "https://www.chinesetest.cn/syllabus"})
+                  with urllib.request.urlopen(req, timeout=90) as r:
+                      body = json.loads(r.read().decode("utf-8"))
+                  if body.get("code") != 0:
+                      raise SystemExit(f"{endpoint}: API code {body.get('code')}")
+                  data = body["data"]
+                  recs += data["records"]
+                  if not data["records"] or len(recs) >= data["total"]:
+                      if len(recs) != data["total"]:
+                          raise SystemExit(f"{endpoint}: {len(recs)} records, API says {data['total']}")
+                      return recs
+                  page += 1
+
+          vocab   = [r for r in fetch("glossaryPage") if r["type"] == 1]
+          hanzi   = fetch("hanziPage")
+          grammar = fetch("languagePage")
+
+          have = {r["sort"] for r in vocab}
+          for p in OMITTED:
+              if p["sort"] in have:
+                  print(f"note: 序号 {p['sort']} {p['word']} is in the API now, patch unused")
+              else:
+                  print(f"note: restoring 序号 {p['sort']} {p['word']} {p['pinyin']}, missing from the API")
+                  vocab.append(p)
+          vocab.sort(key=lambda r: r["sort"])
+
+          def zh(level_id):
+              if level_id not in ZH:
+                  raise SystemExit(f"unknown examLevelId {level_id!r} -- the syllabus changed shape, "
+                                   f"expected one of {list(ZH)}")
+              return ZH[level_id]
+
+          def chars(kind):
+              rows = [r for r in hanzi if str(r["type"]) == kind]
+              return [[str(i), zh(r["examLevelId"]), r["word"]] for i, r in enumerate(rows, 1)]
+
+          # repo file -> (Chinese header, rows, release filename, English header)
+          BUILD = {
+            "词汇.csv": (
+              ["No.", "级别", "词语", "拼音", "词性"],
+              [[str(r["sort"]), r["levelName"], r["word"], r.get("pinyin", ""), r.get("cixing", "")]
+               for r in vocab],
+              "vocabulary.csv", ["No.", "Level", "Word", "Pinyin", "PartOfSpeech"]),
+            "汉字.csv": (
+              ["No.", "级别", "汉字"], chars("1"),
+              "characters.csv", ["No.", "Level", "Character"]),
+            "手写汉字.csv": (
+              ["No.", "级别", "汉字"], chars("2"),
+              "handwriting.csv", ["No.", "Level", "Character"]),
+            "语法.csv": (
+              ["No.", "级别", "类别", "类别名称", "细目", "语法内容", "例句"],
+              [[str(i), zh(r["examLevelId"]), r["grammarType"], r["categoryType"],
+                r["grammarDetail"], r["content"],
+                r["cases"].replace("\r\n", "\n").replace("\r", "\n")]
+               for i, r in enumerate(grammar, 1)],
+              "grammar.csv", ["No.", "Level", "Category", "Subcategory", "Detail", "Content", "Examples"]),
+          }
+
+          def render(header, rows):
+              buf = io.StringIO(newline="")
+              w = csv.writer(buf, lineterminator="\r\n")
+              w.writerow(header); w.writerows(rows)
+              return buf.getvalue().encode("utf-8")
+
+          def band(level):          # 四级（五级） -> 四级
+              return level.split("（")[0]
+
+          def rows_on_disk(path):   # fields contain newlines, so count CSV rows
+              if not path.exists():
+                  return 0
+              return max(0, sum(1 for _ in csv.reader(io.StringIO(path.read_bytes().decode("utf-8")))) - 1)
+
+          # Refuse to overwrite good data with a partial or malformed response.
+          for name, (header, rows, _, _) in BUILD.items():
+              if not rows:
+                  raise SystemExit(f"{name}: no rows")
+              if any(len(r) != len(header) for r in rows):
+                  raise SystemExit(f"{name}: ragged rows")
+              if [int(r[0]) for r in rows] != list(range(1, len(rows) + 1)):
+                  raise SystemExit(f"{name}: No. not contiguous from 1")
+              unexpected = {band(r[1]) for r in rows} - set(BANDS)
+              if unexpected:
+                  raise SystemExit(f"{name}: unexpected 级别 {sorted(unexpected)}")
+              if any(not r[2].strip() for r in rows):
+                  raise SystemExit(f"{name}: empty entry in column 3")
+              was = rows_on_disk(Path(name))
+              if was and len(rows) < was * 0.95:
+                  raise SystemExit(f"{name}: {len(rows)} rows, was {was} -- refusing a 5%+ shrink")
+              print(f"{name}: {len(rows)} rows" + (f" (was {was})" if was and was != len(rows) else ""))
+
+          DIST.mkdir(parents=True, exist_ok=True)
+          sums = []
+          for name, (header, rows, en_name, en_header) in BUILD.items():
+              Path(name).write_bytes(render(header, rows))
+              blob = render(en_header, rows)
+              (DIST / en_name).write_bytes(blob)
+              sums.append(f"{hashlib.sha256(blob).hexdigest()}  {en_name}")
+          (DIST / "SHA256SUMS.txt").write_text("\n".join(sums) + "\n", encoding="utf-8")
+
+          # Release notes: per-band counts, generated from what was just built.
+          labels = ["words", "characters (recognition)", "characters (writing)", "grammar points"]
+          order  = list(BUILD)
+          per    = {n: [sum(1 for r in BUILD[n][1] if band(r[1]) == b) for b in BANDS] for n in order}
+          out = ["Rebuilt from the official syllabus API, `chinesetest.cn/api/hsk/outline/*`.", "",
+                 "| band | " + " | ".join(labels) + " |", "|---|" + "---|" * len(labels)]
+          for i, b in enumerate(["HSK 1", "HSK 2", "HSK 3", "HSK 4", "HSK 5", "HSK 6", "HSK 7-9"]):
+              out.append(f"| {b} | " + " | ".join(str(per[n][i]) for n in order) + " |")
+          out.append("| **total** | " + " | ".join(f"**{sum(per[n])}**" for n in order) + " |")
+          out += ["",
+                  "Assets have English headers and ASCII filenames; the data is unchanged Chinese.",
+                  "",
+                  "```",
+                  "curl -LO https://github.com/ofou/HSK3.0/releases/latest/download/vocabulary.csv",
+                  "curl -LO https://github.com/ofou/HSK3.0/releases/latest/download/characters.csv",
+                  "curl -LO https://github.com/ofou/HSK3.0/releases/latest/download/handwriting.csv",
+                  "curl -LO https://github.com/ofou/HSK3.0/releases/latest/download/grammar.csv",
+                  "```"]
+          (DIST / "NOTES.md").write_text("\n".join(out) + "\n", encoding="utf-8")
+          print("built", ", ".join(sorted(p.name for p in DIST.iterdir())))
+          PY
+
+      - name: Commit the rebuilt CSVs
+        id: data
+        run: |
+          if [ -z "$(git status --porcelain -- '*.csv')" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "no change against the official API"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git status --short -- '*.csv'
+            git config user.name  'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add -- '*.csv'
+            git commit -m "Sync CSVs with the official syllabus API ($(date -u +%Y-%m-%d))"
+            git push
+          fi
+
+      - name: Publish the English-headed build
+        if: steps.data.outputs.changed == 'true' || inputs.force
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="data-$(date -u +%Y-%m)"
+          ASSETS=("$RUNNER_TEMP/dist/vocabulary.csv" "$RUNNER_TEMP/dist/characters.csv" \
+                  "$RUNNER_TEMP/dist/handwriting.csv" "$RUNNER_TEMP/dist/grammar.csv" \
+                  "$RUNNER_TEMP/dist/SHA256SUMS.txt")
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/dist/NOTES.md" --latest
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          else
+            gh release create "$TAG" "${ASSETS[@]}" \
+              --title "HSK syllabus data $(date -u +%Y-%m)" \
+              --notes-file "$RUNNER_TEMP/dist/NOTES.md" --latest
+          fi
+          cat "$RUNNER_TEMP/dist/NOTES.md" >> "$GITHUB_STEP_SUMMARY"
