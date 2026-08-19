@@ -13,6 +13,10 @@ on:
         description: publish a release even if the data is unchanged
         type: boolean
         default: false
+      allow_table_drift:
+        description: accept counts that no longer match the published 2025 table
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -28,9 +32,11 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Rebuild from the official API
+        env:
+          ALLOW_TABLE_DRIFT: ${{ inputs.allow_table_drift }}
         run: |
           python3 - <<'PY'
-          import csv, hashlib, io, json, os, urllib.parse, urllib.request
+          import csv, hashlib, io, json, os, re, urllib.parse, urllib.request
           from pathlib import Path
 
           API  = "https://www.chinesetest.cn/api/hsk/outline/"
@@ -59,6 +65,17 @@ jobs:
           # when absent, so it goes inert if fixed upstream. 大纲 2025-11, 词汇 HSK(五级).
           OMITTED = [{"sort": 2472, "levelName": "五级", "word": "好",
                       "pinyin": "hào", "cixing": "动"}]
+
+          # The published 2025 table, per band 一级…七-九级. 《HSK 考试大纲》 2025-11,
+          # cross-checked against 新版HSK考试大纲1219.pdf. The API is a mirror of this
+          # table, so a deviation is either an API fault or a new edition of the
+          # syllabus -- both deserve a human. Set ALLOW_TABLE_DRIFT to publish anyway.
+          TABLE = {
+              "词汇.csv":     [300, 200, 500, 1000, 1600, 1800, 5600],
+              "汉字.csv":     [246, 125, 284, 441, 431, 413, 1148],
+              "手写汉字.csv":  [0, 100, 150, 150, 150, 150, 500],
+              "语法.csv":     [70, 78, 96, 95, 70, 50, 134],
+          }
 
           def fetch(endpoint):
               recs, page = [], 1
@@ -192,6 +209,66 @@ jobs:
               raise SystemExit(f"coverage: wrote {written} rows, the API served {served}")
           print(f"coverage: {written} rows written, {served} served by the API")
 
+          # Does the mirror still match the published 2025 table?
+          graded = [f for f in BUILD if f["levels"] == BANDS]
+          per_band = {f["name"]: [sum(1 for r in f["rows"] if band(r[1]) == b) for b in BANDS]
+                      for f in graded}
+          drift = {n: (TABLE[n], per_band[n]) for n in TABLE if per_band[n] != TABLE[n]}
+          if drift:
+              for n, (want, got) in drift.items():
+                  print(f"table drift in {n}:")
+                  print(f"  published 2025 大纲 {want}  = {sum(want)}")
+                  print(f"  API today          {got}  = {sum(got)}")
+              if os.environ.get("ALLOW_TABLE_DRIFT") != "true":
+                  raise SystemExit("the API no longer mirrors the published 2025 table -- "
+                                   "confirm a new edition, then re-run with ALLOW_TABLE_DRIFT=true")
+          else:
+              print("table: matches the published 2025 大纲 in every band")
+
+          # The table itself, mirrored from the API rather than transcribed.
+          def cumulative(series):
+              total, out = 0, []
+              for n in series:
+                  total += n
+                  out.append(total)
+              return out
+
+          EN = {"词汇.csv": "Words", "汉字.csv": "Characters", "手写汉字.csv": "Handwriting",
+                "语法.csv": "Grammar", "任务.csv": "Tasks", "话题.csv": "Topics"}
+          ZH_COL = {"词汇.csv": "词汇", "汉字.csv": "认读字", "手写汉字.csv": "书写字",
+                    "语法.csv": "语法", "任务.csv": "任务", "话题.csv": "话题"}
+          table_head_zh = ["级别"] + [c for f in graded for c in (ZH_COL[f["name"]], ZH_COL[f["name"]] + "累计")]
+          table_head_en = ["Level"] + [c for f in graded for c in (EN[f["name"]], EN[f["name"]] + "Cumulative")]
+          cum = {f["name"]: cumulative(per_band[f["name"]]) for f in graded}
+          table_rows = [[BANDS[i]] + [str(v) for f in graded
+                                      for v in (per_band[f["name"]][i], cum[f["name"]][i])]
+                        for i in range(len(BANDS))]
+          BUILD.append(dict(name="大纲.csv", release="syllabus.csv", levels=BANDS, derived=True,
+                            head=table_head_zh, en=table_head_en, rows=table_rows))
+
+          # The README publishes the same table by hand; keep it honest.
+          readme = Path("README.md")
+          if readme.exists():
+              html = readme.read_text(encoding="utf-8")
+              seen = {}
+              for tr in re.findall(r"<tr>(.*?)</tr>", html, re.S):
+                  cells = [re.sub(r"<[^>]+>", "", c).strip()
+                           for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, re.S)]
+                  cells = [c for c in cells if c not in ("Beginner", "Intermediate", "Advanced")]
+                  if len(cells) == 9:
+                      seen[cells[0]] = cells[1:]
+              want = {"1": None, "2": None, "3": None, "4": None, "5": None, "6": None, "7–9": None}
+              for i, key in enumerate(["1", "2", "3", "4", "5", "6", "7–9"]):
+                  want[key] = [str(v) for n in TABLE for v in (per_band[n][i], cum[n][i])]
+              if not seen:
+                  raise SystemExit("README.md: could not find the syllabus table")
+              if seen != want:
+                  for key in want:
+                      if seen.get(key) != want[key]:
+                          print(f"README band {key}: has {seen.get(key)}, API says {want[key]}")
+                  raise SystemExit("README.md no longer agrees with the API -- update the table")
+              print("README: syllabus table agrees with the API")
+
           DIST.mkdir(parents=True, exist_ok=True)
           sums = []
           for f in BUILD:
@@ -201,20 +278,20 @@ jobs:
               sums.append(f"{hashlib.sha256(blob).hexdigest()}  {f['release']}")
           (DIST / "SHA256SUMS.txt").write_text("\n".join(sums) + "\n", encoding="utf-8")
 
-          # Release notes: per-band counts, generated from what was just built.
-          graded = [f for f in BUILD if f["levels"] == BANDS]
+          # Release notes: the table just mirrored, plus the extras.
           labels = {"词汇.csv": "words", "汉字.csv": "characters", "手写汉字.csv": "handwriting",
                     "语法.csv": "grammar", "任务.csv": "tasks", "话题.csv": "topics"}
-          out = ["Rebuilt from the official syllabus API, `chinesetest.cn/api/hsk/outline/*`.", "",
+          out = ["Rebuilt from the official syllabus API, `chinesetest.cn/api/hsk/outline/*`,",
+                 "and checked band by band against the published 2025 大纲.", "",
                  "| band | " + " | ".join(labels[f["name"]] for f in graded) + " |",
                  "|---|" + "---|" * len(graded)]
           for i, b in enumerate(["HSK 1", "HSK 2", "HSK 3", "HSK 4", "HSK 5", "HSK 6", "HSK 7-9"]):
-              counts = [sum(1 for r in f["rows"] if band(r[1]) == BANDS[i]) for f in graded]
-              out.append(f"| {b} | " + " | ".join(str(c) for c in counts) + " |")
+              out.append(f"| {b} | " + " | ".join(str(per_band[f["name"]][i]) for f in graded) + " |")
           out.append("| **total** | " + " | ".join(f"**{len(f['rows'])}**" for f in graded) + " |")
           nouns_file = next(f for f in BUILD if f["name"] == "专有名词.csv")
           out += ["",
-                  f"Plus `propernouns.csv`, {len(nouns_file['rows'])} proper nouns graded 初等/中等/高等.",
+                  f"Plus `propernouns.csv` ({len(nouns_file['rows'])} proper nouns graded 初等/中等/高等)",
+                  "and `syllabus.csv`, the table above as data.",
                   "",
                   "Assets have English headers and ASCII filenames; the data is unchanged Chinese.",
                   ""]
@@ -248,7 +325,7 @@ jobs:
           TAG="data-$(date -u +%Y-%m)"
           cd "$RUNNER_TEMP/dist"
           ASSETS=(vocabulary.csv characters.csv handwriting.csv grammar.csv \
-                  tasks.csv topics.csv propernouns.csv SHA256SUMS.txt)
+                  tasks.csv topics.csv propernouns.csv syllabus.csv SHA256SUMS.txt)
           for a in "${ASSETS[@]}"; do
             [ -s "$a" ] || { echo "missing or empty asset: $a" >&2; exit 1; }
           done

@@ -1,11 +1,13 @@
 # HSK official Query System
-Word, character and grammar lists for the new HSK, as CSV. Current syllabus: 《HSK 考试大纲》 (2025-11, in force 2026-07). The previous standard, 《国际中文教育中文水平等级标准》 *Chinese Proficiency Grading Standards for International Chinese Language Education* (New HSK Levels 2021), is kept alongside it.
+Word, character, grammar, task and topic lists for the new HSK, as CSV — a mirror of the official query system, checked against the published table on every sync. Current syllabus: 《HSK 考试大纲》, released 2025-11, in force from 2026-07.
 
-Data sources: https://www.chinesetest.cn/syllabus and https://www.blcup.com/CW110?id=1065
+Data source: https://www.chinesetest.cn/syllabus
 
 ## Syllabus — HSK 3.0 (2025)
 
 《HSK 考试大纲》 *Syllabus for the Chinese Proficiency Test*, released 2025-11 by 中外语言交流合作中心, in force from 2026-07.
+
+Every number below is verified against the API on each run — [the workflow](.github/workflows/sync.yml) fails if this table and the data disagree, and [`大纲.csv`](大纲.csv) is the same table as data.
 
 <table>
   <thead>
@@ -48,6 +50,7 @@ UTF-8, CRLF, Chinese header row, one entry per row, `No.` contiguous from 1. Eve
 | [`任务.csv`](任务.csv) | 678 | `No., 级别, 任务类型, 任务示例` — 任务大纲: what a candidate must be able to do | `taskPage` |
 | [`话题.csv`](话题.csv) | 427 | `No., 级别, 一级话题, 二级话题, 三级话题` — 话题大纲: topic areas and their items | `topicPage` |
 | [`专有名词.csv`](专有名词.csv) | 231 | `No., 等次, 词语, 类别` — proper nouns by category | `glossaryPage`, `type=2` |
+| [`大纲.csv`](大纲.csv) | 7 | `级别` + introduced and cumulative counts per dimension — the table above as data | derived |
 
 `级别` is `一级`…`六级`, `七-九级`. In [`词汇.csv`](词汇.csv) a word that returns at a higher band with another sense carries both, e.g. `四级（五级）`; the band it counts against is the first one. Writing characters start at band 2: bands 1–2 share one list of 100. The 2025 syllabus has no syllable list, so there is no 音节 file; the 2021 lists are in the git history, up to tag [`3.0`](https://github.com/ofou/hsk/tree/3.0).
 
@@ -55,7 +58,7 @@ UTF-8, CRLF, Chinese header row, one entry per row, `No.` contiguous from 1. Eve
 
 ## Releases
 
-A [monthly workflow](.github/workflows/sync.yml) rebuilds all seven files from the API and, when anything changed, publishes them as an **English-headed build**: identical Chinese data, English column names, ASCII filenames.
+A [monthly workflow](.github/workflows/sync.yml) rebuilds all eight files from the API and, when anything changed, publishes them as an **English-headed build**: identical Chinese data, English column names, ASCII filenames.
 
 ```sh
 curl -LO https://github.com/ofou/hsk/releases/latest/download/vocabulary.csv   # 词汇.csv
@@ -65,11 +68,16 @@ curl -LO https://github.com/ofou/hsk/releases/latest/download/grammar.csv      #
 curl -LO https://github.com/ofou/hsk/releases/latest/download/tasks.csv        # 任务.csv
 curl -LO https://github.com/ofou/hsk/releases/latest/download/topics.csv       # 话题.csv
 curl -LO https://github.com/ofou/hsk/releases/latest/download/propernouns.csv  # 专有名词.csv
+curl -LO https://github.com/ofou/hsk/releases/latest/download/syllabus.csv     # 大纲.csv
 ```
 
 Headers become `No., Level, Word, Pinyin, PartOfSpeech`, `No., Level, Character`, `No., Level, Category, Subcategory, Detail, Content, Examples`, `No., Level, TaskType, TaskExample`, `No., Level, Topic, Subtopic, Items` and `No., Tier, Word, Category`. Each release also carries `SHA256SUMS.txt` and a per-band count table.
 
 The job is a full rebuild, never a patch. It fails instead of writing when the API answers with something unexpected: a page count that disagrees with the reported total, a row count more than 5% below what is on disk, a hole in `No.`, an unknown band, a blank entry, or a record type it does not know how to store. It also asserts coverage — rows written must equal rows served — so a new section appearing upstream breaks the build instead of going unnoticed.
+
+Most importantly it asserts the **mirror** itself: per-band counts must equal the published 2025 table, and the table in this README must equal what the API returned. Either disagreement fails the run and prints the offending cells. A genuine new edition of the syllabus is therefore a deliberate act — dispatch with `allow_table_drift`, then update the table here — rather than something that lands silently.
+
+`upstream: derived` in the table above means computed from the other files, not fetched.
 
 ## Sources
 
