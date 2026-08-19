@@ -321,20 +321,22 @@ jobs:
         if: steps.data.outputs.changed == 'true' || inputs.force
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
+          GH_REPO: ${{ github.repository }}   # gh resolves the repo from git otherwise,
+        run: |                                # and the assets live outside the checkout
           TAG="data-$(date -u +%Y-%m)"
-          cd "$RUNNER_TEMP/dist"
-          ASSETS=(vocabulary.csv characters.csv handwriting.csv grammar.csv \
-                  tasks.csv topics.csv propernouns.csv syllabus.csv SHA256SUMS.txt)
-          for a in "${ASSETS[@]}"; do
-            [ -s "$a" ] || { echo "missing or empty asset: $a" >&2; exit 1; }
+          DIST="$RUNNER_TEMP/dist"
+          ASSETS=()
+          for a in vocabulary.csv characters.csv handwriting.csv grammar.csv \
+                   tasks.csv topics.csv propernouns.csv syllabus.csv SHA256SUMS.txt; do
+            [ -s "$DIST/$a" ] || { echo "missing or empty asset: $a" >&2; exit 1; }
+            ASSETS+=("$DIST/$a")
           done
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/dist/NOTES.md" --latest
+            gh release edit "$TAG" --notes-file "$DIST/NOTES.md" --latest
             gh release upload "$TAG" "${ASSETS[@]}" --clobber
           else
             gh release create "$TAG" "${ASSETS[@]}" \
               --title "HSK syllabus data $(date -u +%Y-%m)" \
-              --notes-file "$RUNNER_TEMP/dist/NOTES.md" --latest
+              --notes-file "$DIST/NOTES.md" --latest
           fi
-          cat "$RUNNER_TEMP/dist/NOTES.md" >> "$GITHUB_STEP_SUMMARY"
+          cat "$DIST/NOTES.md" >> "$GITHUB_STEP_SUMMARY"
