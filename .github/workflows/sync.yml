@@ -25,7 +25,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Rebuild from the official API
         run: |
@@ -40,6 +40,20 @@ jobs:
           ZH = {"HSK1": "一级", "HSK2": "二级", "HSK3": "三级", "HSK4": "四级",
                 "HSK5": "五级", "HSK6": "六级", "HSK7-9": "七-九级"}
           BANDS = list(ZH.values())
+          TIERS = ["初等", "中等", "高等"]
+
+          # Every data-bearing endpoint, with the record types each one is known to
+          # serve. An unknown type means the API grew something this job does not
+          # write yet, and the run fails instead of silently dropping it.
+          # The *Tree endpoints (taskTree, topicTreeOne, topicTreeTwo, languageTree)
+          # return [] -- they are dropdown helpers, they carry no data of their own.
+          ENDPOINTS = {
+              "taskPage": None,          # 任务大纲
+              "topicPage": None,         # 话题大纲
+              "glossaryPage": {1, 2},    # 词汇大纲 + 专有名词 appendix
+              "hanziPage": {"1", "2"},   # 认读字 + 书写字
+              "languagePage": None,      # 语法大纲
+          }
 
           # In the printed syllabus but missing from the query system. Applied only
           # when absent, so it goes inert if fixed upstream. 大纲 2025-11, 词汇 HSK(五级).
@@ -63,12 +77,23 @@ jobs:
                   if not data["records"] or len(recs) >= data["total"]:
                       if len(recs) != data["total"]:
                           raise SystemExit(f"{endpoint}: {len(recs)} records, API says {data['total']}")
+                      print(f"{endpoint}: {len(recs)} records")
                       return recs
                   page += 1
 
-          vocab   = [r for r in fetch("glossaryPage") if r["type"] == 1]
-          hanzi   = fetch("hanziPage")
-          grammar = fetch("languagePage")
+          api = {}
+          for endpoint, known in ENDPOINTS.items():
+              api[endpoint] = fetch(endpoint)
+              if known is not None:
+                  seen = {r["type"] for r in api[endpoint]}
+                  if seen - known:
+                      raise SystemExit(f"{endpoint}: unhandled record type {sorted(seen - known)} "
+                                       f"-- the API grew data this job does not write")
+
+          vocab = [r for r in api["glossaryPage"] if r["type"] == 1]
+          nouns = [r for r in api["glossaryPage"] if r["type"] == 2]
+          if len(vocab) + len(nouns) != len(api["glossaryPage"]):
+              raise SystemExit("glossaryPage: rows lost while splitting by type")
 
           have = {r["sort"] for r in vocab}
           for p in OMITTED:
@@ -86,30 +111,47 @@ jobs:
               return ZH[level_id]
 
           def chars(kind):
-              rows = [r for r in hanzi if str(r["type"]) == kind]
+              rows = [r for r in api["hanziPage"] if str(r["type"]) == kind]
               return [[str(i), zh(r["examLevelId"]), r["word"]] for i, r in enumerate(rows, 1)]
 
-          # repo file -> (Chinese header, rows, release filename, English header)
-          BUILD = {
-            "词汇.csv": (
-              ["No.", "级别", "词语", "拼音", "词性"],
-              [[str(r["sort"]), r["levelName"], r["word"], r.get("pinyin", ""), r.get("cixing", "")]
-               for r in vocab],
-              "vocabulary.csv", ["No.", "Level", "Word", "Pinyin", "PartOfSpeech"]),
-            "汉字.csv": (
-              ["No.", "级别", "汉字"], chars("1"),
-              "characters.csv", ["No.", "Level", "Character"]),
-            "手写汉字.csv": (
-              ["No.", "级别", "汉字"], chars("2"),
-              "handwriting.csv", ["No.", "Level", "Character"]),
-            "语法.csv": (
-              ["No.", "级别", "类别", "类别名称", "细目", "语法内容", "例句"],
-              [[str(i), zh(r["examLevelId"]), r["grammarType"], r["categoryType"],
-                r["grammarDetail"], r["content"],
-                r["cases"].replace("\r\n", "\n").replace("\r", "\n")]
-               for i, r in enumerate(grammar, 1)],
-              "grammar.csv", ["No.", "Level", "Category", "Subcategory", "Detail", "Content", "Examples"]),
-          }
+          BUILD = [
+            dict(name="词汇.csv", release="vocabulary.csv", levels=BANDS,
+                 head=["No.", "级别", "词语", "拼音", "词性"],
+                 en=["No.", "Level", "Word", "Pinyin", "PartOfSpeech"],
+                 rows=[[str(r["sort"]), r["levelName"], r["word"],
+                        r.get("pinyin", ""), r.get("cixing", "")] for r in vocab]),
+            dict(name="汉字.csv", release="characters.csv", levels=BANDS,
+                 head=["No.", "级别", "汉字"], en=["No.", "Level", "Character"],
+                 rows=chars("1")),
+            dict(name="手写汉字.csv", release="handwriting.csv", levels=BANDS,
+                 head=["No.", "级别", "汉字"], en=["No.", "Level", "Character"],
+                 rows=chars("2")),
+            dict(name="语法.csv", release="grammar.csv", levels=BANDS,
+                 head=["No.", "级别", "类别", "类别名称", "细目", "语法内容", "例句"],
+                 en=["No.", "Level", "Category", "Subcategory", "Detail", "Content", "Examples"],
+                 rows=[[str(i), zh(r["examLevelId"]), r["grammarType"], r["categoryType"],
+                        r["grammarDetail"], r["content"],
+                        r["cases"].replace("\r\n", "\n").replace("\r", "\n")]
+                       for i, r in enumerate(api["languagePage"], 1)]),
+            dict(name="任务.csv", release="tasks.csv", levels=BANDS,
+                 head=["No.", "级别", "任务类型", "任务示例"],
+                 en=["No.", "Level", "TaskType", "TaskExample"],
+                 rows=[[str(i), zh(r["examLevelId"]), r["level1Content"], r["level2Content"]]
+                       for i, r in enumerate(api["taskPage"], 1)]),
+            dict(name="话题.csv", release="topics.csv", levels=BANDS,
+                 head=["No.", "级别", "一级话题", "二级话题", "三级话题"],
+                 en=["No.", "Level", "Topic", "Subtopic", "Items"],
+                 rows=[[str(i), zh(r["examLevelId"]), r["level1Content"],
+                        r["level2Content"], r["level3Content"]]
+                       for i, r in enumerate(api["topicPage"], 1)]),
+            # Proper nouns: served from the vocabulary table but tiered 初等/中等/高等,
+            # no pinyin, and not part of the 11000. It is the 2021 standard's appendix.
+            dict(name="专有名词.csv", release="propernouns.csv", levels=TIERS,
+                 head=["No.", "等次", "词语", "类别"],
+                 en=["No.", "Tier", "Word", "Category"],
+                 rows=[[str(i), r["levelName"], r["word"], r.get("cixing", "")]
+                       for i, r in enumerate(sorted(nouns, key=lambda r: r["sort"]), 1)]),
+          ]
 
           def render(header, rows):
               buf = io.StringIO(newline="")
@@ -126,16 +168,17 @@ jobs:
               return max(0, sum(1 for _ in csv.reader(io.StringIO(path.read_bytes().decode("utf-8")))) - 1)
 
           # Refuse to overwrite good data with a partial or malformed response.
-          for name, (header, rows, _, _) in BUILD.items():
+          for f in BUILD:
+              name, head, rows = f["name"], f["head"], f["rows"]
               if not rows:
                   raise SystemExit(f"{name}: no rows")
-              if any(len(r) != len(header) for r in rows):
+              if any(len(r) != len(head) for r in rows):
                   raise SystemExit(f"{name}: ragged rows")
               if [int(r[0]) for r in rows] != list(range(1, len(rows) + 1)):
                   raise SystemExit(f"{name}: No. not contiguous from 1")
-              unexpected = {band(r[1]) for r in rows} - set(BANDS)
+              unexpected = {band(r[1]) for r in rows} - set(f["levels"])
               if unexpected:
-                  raise SystemExit(f"{name}: unexpected 级别 {sorted(unexpected)}")
+                  raise SystemExit(f"{name}: unexpected level {sorted(unexpected)}")
               if any(not r[2].strip() for r in rows):
                   raise SystemExit(f"{name}: empty entry in column 3")
               was = rows_on_disk(Path(name))
@@ -143,33 +186,40 @@ jobs:
                   raise SystemExit(f"{name}: {len(rows)} rows, was {was} -- refusing a 5%+ shrink")
               print(f"{name}: {len(rows)} rows" + (f" (was {was})" if was and was != len(rows) else ""))
 
+          written = sum(len(f["rows"]) for f in BUILD)
+          served  = sum(len(v) for v in api.values()) + sum(1 for p in OMITTED if p["sort"] not in have)
+          if written != served:
+              raise SystemExit(f"coverage: wrote {written} rows, the API served {served}")
+          print(f"coverage: {written} rows written, {served} served by the API")
+
           DIST.mkdir(parents=True, exist_ok=True)
           sums = []
-          for name, (header, rows, en_name, en_header) in BUILD.items():
-              Path(name).write_bytes(render(header, rows))
-              blob = render(en_header, rows)
-              (DIST / en_name).write_bytes(blob)
-              sums.append(f"{hashlib.sha256(blob).hexdigest()}  {en_name}")
+          for f in BUILD:
+              Path(f["name"]).write_bytes(render(f["head"], f["rows"]))
+              blob = render(f["en"], f["rows"])
+              (DIST / f["release"]).write_bytes(blob)
+              sums.append(f"{hashlib.sha256(blob).hexdigest()}  {f['release']}")
           (DIST / "SHA256SUMS.txt").write_text("\n".join(sums) + "\n", encoding="utf-8")
 
           # Release notes: per-band counts, generated from what was just built.
-          labels = ["words", "characters (recognition)", "characters (writing)", "grammar points"]
-          order  = list(BUILD)
-          per    = {n: [sum(1 for r in BUILD[n][1] if band(r[1]) == b) for b in BANDS] for n in order}
+          graded = [f for f in BUILD if f["levels"] == BANDS]
+          labels = {"词汇.csv": "words", "汉字.csv": "characters", "手写汉字.csv": "handwriting",
+                    "语法.csv": "grammar", "任务.csv": "tasks", "话题.csv": "topics"}
           out = ["Rebuilt from the official syllabus API, `chinesetest.cn/api/hsk/outline/*`.", "",
-                 "| band | " + " | ".join(labels) + " |", "|---|" + "---|" * len(labels)]
+                 "| band | " + " | ".join(labels[f["name"]] for f in graded) + " |",
+                 "|---|" + "---|" * len(graded)]
           for i, b in enumerate(["HSK 1", "HSK 2", "HSK 3", "HSK 4", "HSK 5", "HSK 6", "HSK 7-9"]):
-              out.append(f"| {b} | " + " | ".join(str(per[n][i]) for n in order) + " |")
-          out.append("| **total** | " + " | ".join(f"**{sum(per[n])}**" for n in order) + " |")
+              counts = [sum(1 for r in f["rows"] if band(r[1]) == BANDS[i]) for f in graded]
+              out.append(f"| {b} | " + " | ".join(str(c) for c in counts) + " |")
+          out.append("| **total** | " + " | ".join(f"**{len(f['rows'])}**" for f in graded) + " |")
+          nouns_file = next(f for f in BUILD if f["name"] == "专有名词.csv")
           out += ["",
-                  "Assets have English headers and ASCII filenames; the data is unchanged Chinese.",
+                  f"Plus `propernouns.csv`, {len(nouns_file['rows'])} proper nouns graded 初等/中等/高等.",
                   "",
-                  "```",
-                  "curl -LO https://github.com/ofou/hsk/releases/latest/download/vocabulary.csv",
-                  "curl -LO https://github.com/ofou/hsk/releases/latest/download/characters.csv",
-                  "curl -LO https://github.com/ofou/hsk/releases/latest/download/handwriting.csv",
-                  "curl -LO https://github.com/ofou/hsk/releases/latest/download/grammar.csv",
-                  "```"]
+                  "Assets have English headers and ASCII filenames; the data is unchanged Chinese.",
+                  ""]
+          out += ["```"] + [f"curl -LO https://github.com/ofou/hsk/releases/latest/download/{f['release']}"
+                            for f in BUILD] + ["```"]
           (DIST / "NOTES.md").write_text("\n".join(out) + "\n", encoding="utf-8")
           print("built", ", ".join(sorted(p.name for p in DIST.iterdir())))
           PY
@@ -196,9 +246,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="data-$(date -u +%Y-%m)"
-          ASSETS=("$RUNNER_TEMP/dist/vocabulary.csv" "$RUNNER_TEMP/dist/characters.csv" \
-                  "$RUNNER_TEMP/dist/handwriting.csv" "$RUNNER_TEMP/dist/grammar.csv" \
-                  "$RUNNER_TEMP/dist/SHA256SUMS.txt")
+          cd "$RUNNER_TEMP/dist"
+          ASSETS=(vocabulary.csv characters.csv handwriting.csv grammar.csv \
+                  tasks.csv topics.csv propernouns.csv SHA256SUMS.txt)
+          for a in "${ASSETS[@]}"; do
+            [ -s "$a" ] || { echo "missing or empty asset: $a" >&2; exit 1; }
+          done
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release edit "$TAG" --notes-file "$RUNNER_TEMP/dist/NOTES.md" --latest
             gh release upload "$TAG" "${ASSETS[@]}" --clobber
